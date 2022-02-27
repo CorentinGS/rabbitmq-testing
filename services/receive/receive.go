@@ -30,15 +30,35 @@ func main() {
 		}
 	}(ch)
 
-	q, err := ch.QueueDeclare(
-		"hello", // name
-		false,   // durable
-		false,   // delete when unused
-		false,   // exclusive
+	err = ch.ExchangeDeclare(
+		"logs",  // name
+		"topic", // type
+		true,    // durable
+		false,   // auto-deleted
+		false,   // internal
 		false,   // no-wait
 		nil,     // arguments
 	)
+	failOnError(err, "Failed to declare an exchange")
+
+	q, err := ch.QueueDeclare(
+		"",    // name
+		false, // durable
+		false, // delete when unused
+		true,  // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
 	failOnError(err, "Failed to declare a queue")
+
+	err = ch.QueueBind(
+		q.Name,    // queue name
+		"error.#", // routing key
+		"logs",    // exchange
+		false,
+		nil,
+	)
+	failOnError(err, "Failed to bind a queue")
 
 	msgs, err := ch.Consume(
 		q.Name, // queue
