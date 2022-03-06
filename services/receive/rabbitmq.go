@@ -1,60 +1,85 @@
 package main
 
 import (
-	"context"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"go.mongodb.org/mongo-driver/bson"
 	"log"
 )
 
-func ErrorChan(ch *amqp.Channel, topic Topic) {
+type Queue struct {
+	keys       []string
+	Name       string
+	Collection string
+}
 
-	q, err := ch.QueueDeclare(
-		"",    // name
-		false, // durable
-		false, // delete when unused
-		true,  // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
-	failOnError(err, "Failed to declare a queue")
+func failOnError(err error, msg string) {
+	if err != nil {
+		log.Panicf("%s: %s", msg, err)
+	}
+}
 
-	err = ch.QueueBind(
-		q.Name,    // queue name
-		topic.Key, // routing key
-		"logs",    // exchange
-		false,
-		nil,
-	)
-	failOnError(err, "Failed to bind a queue")
+type RabbitMQConnection struct {
+	conn     *amqp.Connection
+	channel  *amqp.Channel
+	queues   map[string]Queue
+	exchange string
+}
 
-	msgs, err := ch.Consume(
-		q.Name, // queue
-		"",     // consumer
-		true,   // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-	failOnError(err, "Failed to register a consumer")
+func (connection *RabbitMQConnection) Set(conn *amqp.Connection, channel *amqp.Channel, queues map[string]Queue, exchange string) {
+	connection.conn = conn
+	connection.channel = channel
+	connection.queues = queues
+	connection.exchange = exchange
+}
 
-	forever := make(chan bool)
-
-	go func() {
-		for d := range msgs {
-			log.Printf("Received a message: %s", d.Body)
-			collection := mg.Db.Collection(topic.Collection)
-			_, err := collection.InsertOne(context.TODO(), bson.D{{
-				Key:   "name",
-				Value: "Chris",
-			}})
-			if err != nil {
-				return
+func (connection *RabbitMQConnection) SetQueues(queues []Queue) error {
+	for _, q := range queues {
+		connection.queues[q.Name] = q
+		if _, err := connection.channel.QueueDeclare(q.Name, true, false, false, false, nil); err != nil {
+			return err
+		}
+		for _, k := range q.keys {
+			if err := connection.channel.QueueBind(q.Name, k, connection.exchange, false, nil); err != nil {
+				return err
 			}
 		}
-	}()
+	}
+	return nil
+}
 
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
-	<-forever
+func (connection *RabbitMQConnection) Consume() (map[string]<-chan amqp.Delivery, error) {
+	m := make(map[string]<-chan amqp.Delivery)
+	for _, q := range connection.queues {
+		deliveries, err := connection.channel.Consume(q.Name, "", true, false, false, false, nil)
+		if err != nil {
+			return nil, err
+		}
+		m[q.Name] = deliveries
+	}
+	return m, nil
+}
+
+func InitConnection(exchange string) *RabbitMQConnection {
+	rabbitMQConn := new(RabbitMQConnection)
+
+	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	failOnError(err, "Failed to connect to RabbitMQ")
+
+	ch, err := conn.Channel()
+	failOnError(err, "Failed to open a channel")
+
+	err = ch.ExchangeDeclare(
+		exchange, // name
+		"topic",  // type
+		true,     // durable
+		false,    // auto-deleted
+		false,    // internal
+		false,    // no-wait
+		nil,      // arguments
+	)
+	failOnError(err, "Failed to declare an exchange")
+	queues := make(map[string]Queue)
+
+	rabbitMQConn.Set(conn, ch, queues, exchange)
+
+	return rabbitMQConn
 }

@@ -1,9 +1,22 @@
 package main
 
 import (
+	"encoding/json"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
+	"time"
 )
+
+type Log struct {
+	Type      string    `json:"type"`
+	Message   string    `json:"message"`
+	Level     string    `json:"level"`
+	Event     string    `json:"event"`
+	CreatedAt time.Time `json:"createdat"`
+	UserID    uint      `json:"userid"`
+	DeckID    uint      `json:"deckid"`
+	CardID    uint      `json:"cardid"`
+}
 
 func failOnError(err error, msg string) {
 	if err != nil {
@@ -41,14 +54,22 @@ func main() {
 	)
 	failOnError(err, "Failed to declare an exchange")
 
-	body := "Hello World!"
+	body, _ := json.Marshal(Log{
+		Type:      "Logging",
+		Message:   "Toto logged in",
+		Level:     "error",
+		Event:     "login",
+		CreatedAt: time.Now(),
+		UserID:    132,
+		DeckID:    0,
+	})
 	err = ch.Publish(
-		"logs",            // exchange
-		"info.auth.login", // routing key
-		false,             // mandatory
-		false,             // immediate
+		"logs",             // exchange
+		"error.auth.login", // routing key
+		false,              // mandatory
+		false,              // immediate
 		amqp.Publishing{
-			ContentType: "text/plain",
+			ContentType: "application/json",
 			Body:        []byte(body),
 		})
 	failOnError(err, "Failed to publish a message")
