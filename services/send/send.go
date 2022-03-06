@@ -43,10 +43,10 @@ func main() {
 
 	body := "Hello World!"
 	err = ch.Publish(
-		"logs",             // exchange
-		"error.auth.login", // routing key
-		false,              // mandatory
-		false,              // immediate
+		"logs",            // exchange
+		"info.auth.login", // routing key
+		false,             // mandatory
+		false,             // immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
 			Body:        []byte(body),
