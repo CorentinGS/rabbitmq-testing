@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"go.mongodb.org/mongo-driver/bson"
 	"log"
 )
 
@@ -15,11 +15,24 @@ func failOnError(err error, msg string) {
 
 var mg MongoInstance
 
+type Topic struct {
+	Key        string
+	Collection string
+}
+
 func main() {
 	err := Connect()
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	defer func() {
+		fmt.Println("Disconnect")
+		err := mg.Client.Disconnect(context.TODO())
+		if err != nil {
+			return
+		}
+	}()
 
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -50,52 +63,16 @@ func main() {
 	)
 	failOnError(err, "Failed to declare an exchange")
 
-	q, err := ch.QueueDeclare(
-		"",    // name
-		false, // durable
-		false, // delete when unused
-		true,  // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
-	failOnError(err, "Failed to declare a queue")
-
-	err = ch.QueueBind(
-		q.Name,    // queue name
-		"error.#", // routing key
-		"logs",    // exchange
-		false,
-		nil,
-	)
-	failOnError(err, "Failed to bind a queue")
-
-	msgs, err := ch.Consume(
-		q.Name, // queue
-		"",     // consumer
-		true,   // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-	failOnError(err, "Failed to register a consumer")
-
 	forever := make(chan bool)
 
-	go func() {
-		for d := range msgs {
-			log.Printf("Received a message: %s", d.Body)
-			collection := mg.Db.Collection("error")
-			_, err := collection.InsertOne(context.TODO(), bson.D{{
-				Key:   "name",
-				Value: "Chris",
-			}})
-			if err != nil {
-				return
-			}
-		}
-	}()
+	topics := []Topic{{Key: "error.#", Collection: "error"}, {Key: "info.#", Collection: "info"}}
+	for _, topic := range topics {
+		go func(topic Topic) {
+			ErrorChan(ch, topic)
+		}(topic)
+	}
 
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
+
+	fmt.Println("Test")
 }
