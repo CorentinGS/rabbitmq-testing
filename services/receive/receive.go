@@ -2,23 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
 )
 
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Panicf("%s: %s", msg, err)
-	}
-}
-
 var mg MongoInstance
-
-type Topic struct {
-	Key        string
-	Collection string
-}
 
 func main() {
 	err := Connect()
@@ -34,44 +24,61 @@ func main() {
 		}
 	}()
 
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
-	failOnError(err, "Failed to connect to RabbitMQ")
+	connection := InitConnection("logs")
+
 	defer func(conn *amqp.Connection) {
 		err := conn.Close()
 		if err != nil {
 			failOnError(err, "Failed to close connection")
 		}
-	}(conn)
+	}(connection.conn)
 
-	ch, err := conn.Channel()
-	failOnError(err, "Failed to open a channel")
 	defer func(ch *amqp.Channel) {
 		err := ch.Close()
 		if err != nil {
 			failOnError(err, "Failed to close channel")
 		}
-	}(ch)
+	}(connection.channel)
 
-	err = ch.ExchangeDeclare(
-		"logs",  // name
-		"topic", // type
-		true,    // durable
-		false,   // auto-deleted
-		false,   // internal
-		false,   // no-wait
-		nil,     // arguments
-	)
-	failOnError(err, "Failed to declare an exchange")
+	queues := []Queue{{
+		keys:       []string{"error.#"},
+		Name:       "error",
+		Collection: "error",
+	}, {
+		keys:       []string{"info.#"},
+		Name:       "info",
+		Collection: "info",
+	}}
+
+	err = connection.SetQueues(queues)
+	if err != nil {
+		return
+	}
 
 	forever := make(chan bool)
 
-	topics := []Topic{{Key: "error.#", Collection: "error"}, {Key: "info.#", Collection: "info"}}
-	for _, topic := range topics {
-		go func(topic Topic) {
-			ErrorChan(ch, topic)
-		}(topic)
+	deliveries, err := connection.Consume()
+	if err != nil {
+		panic(err)
 	}
 
+	for q, d := range deliveries {
+		go func(q string, delivery <-chan amqp.Delivery) {
+			for d := range delivery {
+				log.Printf("Received a message: %s from %s", d.Body, q)
+				logObject := new(Log)
+				err := json.Unmarshal(d.Body, &logObject)
+				collection := mg.Db.Collection(connection.queues[q].Collection)
+				_, err = collection.InsertOne(context.TODO(), logObject)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+			}
+		}(q, d)
+	}
+
+	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
 
 	fmt.Println("Test")
