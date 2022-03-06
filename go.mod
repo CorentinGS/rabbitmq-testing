@@ -1,4 +1,4 @@
-module test/rabbit
+module rabbitmq-testing
 
 go 1.17
 
